@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vlm-zoom"
+version = "0.1.0"
+description = "Adaptive high-resolution tiling, exact visual token budgeting, pinned-context prefix caching, and Glance-and-Zoom inference for VLMs on vLLM (remote sensing, geological maps, 4K GUI, CAD & documents)."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "ca33-zx", email = "ca33-zx@users.noreply.github.com" }]
+keywords = [
+    "vlm",
+    "multimodal",
+    "vllm",
+    "qwen-vl",
+    "high-resolution",
+    "tiling",
+    "remote-sensing",
+    "geological-map",
+    "spatial-intelligence",
+    "prefix-caching",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "httpx>=0.27.0",
+    "numpy>=1.24.0",
+    "pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.6.0",
+]
+
+[project.scripts]
+vlm-zoom = "vlm_zoom.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ca33-zx/vlm-zoom"
+Repository = "https://github.com/ca33-zx/vlm-zoom"
+Issues = "https://github.com/ca33-zx/vlm-zoom/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vlm_zoom"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
