@@ -15,6 +15,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 from PIL import Image
 
 from .budget import TokenEstimate, VisionModelSpec, estimate_visual_tokens, resolve_model_spec
@@ -163,19 +164,117 @@ class TilingPlan:
         )
 
 
-def load_image(source: str | Path | Image.Image) -> Image.Image:
-    if isinstance(source, Image.Image):
-        return source.convert("RGB")
-    with Image.open(source) as img:
+def normalize_scientific_image(
+    array: np.ndarray,
+    *,
+    percentiles: tuple[float, float] = (2.0, 98.0),
+) -> Image.Image:
+    """Convert 16-bit integer, 32-bit float, or multi-band imagery to crisp 8-bit RGB.
+
+    Applies robust percentile contrast stretching so raw remote-sensing GeoTIFFs
+    (e.g. 16-bit Sentinel-2 / Landsat reflectance or float32 DEMs) do not turn black
+    under naive `PIL.Image.convert("RGB")`.
+    """
+    arr = np.asarray(array)
+    if arr.ndim == 2:
+        arr = np.stack([arr, arr, arr], axis=-1)
+    elif arr.ndim == 3:
+        if arr.shape[2] == 1:
+            arr = np.repeat(arr, 3, axis=-1)
+        elif arr.shape[2] >= 3:
+            arr = arr[:, :, :3]
+        else:
+            raise ValueError(f"Unsupported channel count: {arr.shape[2]}")
+    else:
+        raise ValueError(f"Expected 2D or 3D image array, got shape {arr.shape}.")
+
+    if arr.dtype == np.uint8:
+        return Image.fromarray(arr, mode="RGB")
+
+    data = arr.astype(np.float32, copy=False)
+    finite_mask = np.isfinite(data)
+    if not np.any(finite_mask):
+        return Image.fromarray(np.zeros(data.shape, dtype=np.uint8), mode="RGB")
+
+    lo_p, hi_p = percentiles
+    out = np.empty(data.shape, dtype=np.uint8)
+    for c in range(3):
+        ch = data[:, :, c]
+        valid = ch[np.isfinite(ch)]
+        if valid.size == 0:
+            out[:, :, c] = 0
+            continue
+        lo = float(np.percentile(valid, lo_p))
+        hi = float(np.percentile(valid, hi_p))
+        if hi <= lo:
+            lo = float(valid.min())
+            hi = float(valid.max())
+        if hi <= lo:
+            out[:, :, c] = 0
+        else:
+            scaled = np.clip((np.nan_to_num(ch, nan=lo) - lo) / (hi - lo), 0.0, 1.0)
+            out[:, :, c] = np.round(scaled * 255.0).astype(np.uint8)
+    return Image.fromarray(out, mode="RGB")
+
+
+def _pil_to_rgb_safe(
+    img: Image.Image,
+    *,
+    percentiles: tuple[float, float] = (2.0, 98.0),
+) -> Image.Image:
+    if img.mode in ("RGB", "RGBA", "L", "P", "LA", "CMYK"):
         return img.convert("RGB")
+    # High-bit-depth or float TIFFs (`I;16`, `I;16B`, `I`, `F`, etc.)
+    return normalize_scientific_image(np.asarray(img), percentiles=percentiles)
 
 
-def read_image_size(source: str | Path | Image.Image) -> tuple[int, int]:
+def load_image(
+    source: str | Path | Image.Image | np.ndarray,
+    *,
+    allow_huge_images: bool = True,
+    stretch_percentiles: tuple[float, float] = (2.0, 98.0),
+) -> Image.Image:
+    """Load an image path, PIL Image, or NumPy array safely as 8-bit RGB.
+
+    Handles 100MP+ gigapixel maps/orthophotos (when `allow_huge_images=True`)
+    and auto-stretches 16-bit / float32 scientific TIFFs.
+    """
+    if isinstance(source, np.ndarray):
+        return normalize_scientific_image(source, percentiles=stretch_percentiles)
+    if isinstance(source, Image.Image):
+        return _pil_to_rgb_safe(source, percentiles=stretch_percentiles)
+
+    prev_limit = Image.MAX_IMAGE_PIXELS
+    if allow_huge_images:
+        Image.MAX_IMAGE_PIXELS = None
+    try:
+        with Image.open(source) as img:
+            return _pil_to_rgb_safe(img, percentiles=stretch_percentiles)
+    finally:
+        Image.MAX_IMAGE_PIXELS = prev_limit
+
+
+def read_image_size(
+    source: str | Path | Image.Image | np.ndarray,
+    *,
+    allow_huge_images: bool = True,
+) -> tuple[int, int]:
     """Read `(width, height)` lazily from image headers without decoding pixels."""
+    if isinstance(source, np.ndarray):
+        if source.ndim < 2:
+            raise ValueError(f"Expected 2D/3D array, got shape {source.shape}.")
+        return int(source.shape[1]), int(source.shape[0])
     if isinstance(source, Image.Image):
         return source.size
-    with Image.open(source) as img:
-        return img.size
+
+    prev_limit = Image.MAX_IMAGE_PIXELS
+    if allow_huge_images:
+        Image.MAX_IMAGE_PIXELS = None
+    try:
+        with Image.open(source) as img:
+            return img.size
+    finally:
+        Image.MAX_IMAGE_PIXELS = prev_limit
 
 
 def image_to_data_url(

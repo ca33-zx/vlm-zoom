@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -12,6 +13,8 @@ from vlm_zoom.tiler import (
     PixelBox,
     TileSpec,
     build_pinned_context,
+    load_image,
+    normalize_scientific_image,
     read_image_size,
 )
 
@@ -150,3 +153,26 @@ def test_build_pinned_context_crops_legend_losslessly():
     assert ctx.source_box == PixelBox(1600.0, 100.0, 1950.0, 1100.0)
     assert ctx.estimated_tokens <= 1024
     assert ctx.data_url.startswith("data:image/png;base64,")
+
+
+def test_normalize_scientific_16bit_tiff_and_float_array(tmp_path: Path):
+    # 16-bit single-band remote sensing TIFF (values in 1000..4000 range)
+    arr16 = np.linspace(1000, 4000, 64 * 96, dtype=np.uint16).reshape(64, 96)
+    tiff_path = tmp_path / "sentinel_band.tif"
+    Image.fromarray(arr16).save(tiff_path)
+
+    loaded = load_image(tiff_path)
+    assert loaded.mode == "RGB"
+    assert loaded.size == (96, 64)
+    rgb = np.asarray(loaded)
+    assert rgb.min() == 0
+    assert rgb.max() == 255
+
+    # Float32 multi-band array with NaNs (4 bands -> takes first 3)
+    f_arr = np.linspace(-50.0, 250.0, 40 * 80 * 4, dtype=np.float32).reshape(40, 80, 4)
+    f_arr[0, 0, :] = np.nan
+    assert read_image_size(f_arr) == (80, 40)
+    stretched = normalize_scientific_image(f_arr)
+    assert stretched.mode == "RGB"
+    assert stretched.size == (80, 40)
+    assert np.asarray(stretched).max() == 255

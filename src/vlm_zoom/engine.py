@@ -204,6 +204,7 @@ class ZoomEngine:
         roi: PixelBox | tuple[float, float, float, float] | None = None,
         grid: tuple[int, int] | None = None,
         legend_box: PixelBox | tuple[float, float, float, float] | None = None,
+        pinned_boxes: dict[str, PixelBox | tuple[float, float, float, float]] | None = None,
         pin_overview: bool = False,
         pinned_max_tokens: int = 1024,
         glance_max_tokens: int = 1024,
@@ -241,6 +242,18 @@ class ZoomEngine:
                     fmt="PNG",  # lossless for crisp tiny legend text & color swatches
                 )
             )
+        if pinned_boxes:
+            for label, box in pinned_boxes.items():
+                pinned_contexts.append(
+                    build_pinned_context(
+                        image,
+                        label=label,
+                        box=box,
+                        model_or_family=self.spec,
+                        max_tokens=pinned_max_tokens,
+                        fmt="PNG",
+                    )
+                )
 
         glance_rois: list[PixelBox] = []
         glance_tokens = 0

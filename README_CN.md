@@ -2,10 +2,10 @@
 
 # `vlm-zoom`
 
-**面向 vLLM 多模态推理的高分辨率自适应切片、精确视觉 Token 预算规划、图例前缀缓存（Prefix Caching）与 Glance-and-Zoom 引擎**
+**面向 vLLM 多模态推理的高分辨率自适应切片、精确视觉 Token 预算规划、多区域固定前缀缓存（Prefix Caching）与 Glance-and-Zoom 引擎**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-34%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-37%20passed-brightgreen.svg)](tests/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 
@@ -15,32 +15,49 @@
 
 ---
 
-在实际业务与科研场景中，当把 **1:50,000 区域地质图、高分遥感卫星正射影像、工程 CAD 图纸、4K/8K GUI 截图或密集图文页面** 输入 `Qwen2.5-VL / Qwen3-VL / Qwen3.5 / InternVL` 等多模态大模型时，几乎都会遇到两难问题：
+当把 **4K–8K 区域地质图、亚米级遥感卫星正射影像、4K 桌面 GUI / 密集财报表格、工程 CAD / PCB 电路原理图** 输入 `Qwen2.5-VL / Qwen3-VL / Qwen3.5 / InternVL` 等多模态大模型时，几乎都会遇到两难问题：
 
-- **整图强行缩放到 1024 token 预算**：地质图上的地层代号（`J3`、`K1`、`gamma5`）、产状倾角、断层注记、遥感小目标直接糊成马赛克；
-- **原图直出推理**：视觉 Token 和显存 KV Cache 瞬间爆炸；而简单粗暴地切成网格后，每个切片又会**丢失全局视角与右侧图例（Legend）**，导致模型“看得清局部，却认不出图例含义”，且切片交界处还会出现大量重复检测框。
+- **整图压到 1024 token 预算**：地质图上的同位素年龄与地层代号、高速路上的车辆、表格里的 11px 数字、电路图电阻标号直接糊成马赛克（缩放比跌至 `0.25x`）；
+- **原图直出推理**：单图动辄 `10,000–15,000+` 视觉 Token，KV Cache 和首字延迟瞬间爆炸；而简单网格切片又会**丢失图例、表格列名表头、CAD 标题栏/BOM**，并在切片交界产生大量重复检测框。
 
-**`vlm-zoom`** 用纯 Python（零 PyTorch / 零 GDAL 重依赖）一站式解决以上痛点，专为 **vLLM / SGLang** 生产部署设计。
+**`vlm-zoom`** 用纯 Python（零 PyTorch、零 GDAL 依赖）一站式解决以上痛点，专为 **vLLM / SGLang** 生产推理设计。
 
-![vlm-zoom 在 4.8K 地质图上的直出压缩 vs 自适应切片对比](assets/geological_map_demo.png)
+![真实 5.3K USGS 地质图直出压缩 vs vlm-zoom 效果对比](assets/demo_real_geological_map.png)
 
 ---
 
-## 核心特性
+## 四大真实 / 高保真场景展示画廊
 
-1. **精确视觉 Token 预算器（零像素解码）**：
-   - 内置 `Qwen2-VL / Qwen2.5-VL`（factor=28）、`Qwen3-VL / Qwen3.5`（factor=32）的精确 `smart_resize` 算法，以及 `InternVL` 动态切片 + 缩略图计数模型；
-   - 仅读图片文件头即可毫秒级规划最优 `(rows, cols)` 重叠网格，保证每个切片严格不超过 `max_tokens_per_tile` 且清晰度维持在近原生分辨率（`0.85x–1.0x`）。
-2. **Pinned Context 图例固定 + vLLM Prefix Caching 零冗余计算**：
-   - 支持把**地质图图例（`legend_box`）**或**全局缩略图（`pin_overview=True`）**以无损 PNG 固定在所有并发切片请求的消息前缀中；
-   - 保证所有切片请求的前缀字节 100% 一致，配合 vLLM `--enable-prefix-caching`，图例与全局概览的视觉 KV Cache 只需计算 **1 次**，所有切片直接复用！
-3. **两阶段 `Glance-and-Zoom` 聚焦推理**：
-   - Stage 1 先用极低 Token 概览全图定位候选 ROI 区域；
-   - Stage 2 仅对 ROI 区域做高分切片并行推理，跳过大面积无关空白背景。
-4. **跨切片坐标还原与 WBF / NMS 融合**：
-   - 自动解析 Qwen JSON (`bbox_2d`)、`<|box_start|>` 旧标签及方括号坐标，精准映射回原图全局像素坐标，并通过 **Weighted Boxes Fusion (WBF)** 或 **NMS + Containment** 消除切片重叠区的重复框与残缺框。
-5. **纯 Python 地理坐标投影（免 GDAL）**：
-   - 直接解析 ESRI 世界文件（`.tfw` / `.pgw` / `.jgw` / `.wld`），将融合后的检测框一键转换为真实地图坐标（WGS84 / UTM）。
+### 1. 真实 5K 亚米级航空遥感影像 — `Glance-and-Zoom` 省 `80%` 视觉 Token
+Stage 1 先用 `1024` token 概览全图定位核心目标区（好莱坞碗剧场 + US-101 高速走廊），自动跳过大面积荒山背景，Stage 2 仅对 ROI 区域以 `1.00x` 原生分辨率放大切片，高速路上的每辆车与车道线纤毫毕现。
+
+![真实 5K USGS 航空正射影像 Glance-and-Zoom 对比](assets/demo_real_remote_sensing.png)
+
+### 2. 4K 桌面 GUI Agent 与密集财务/监控表格 — 固定表头（Pinned Header + KV Cache）
+把 **表格列名表头（Table Header）** 与 **顶部工具栏** 固定在所有切片请求的字节级一致前缀中：vLLM 只算 **1 次** 表头视觉 KV Cache 全切片复用，既保留 11px 异常数字的清晰度，又将点击按钮精确反算回 4K 全局坐标。
+
+![4K GUI 与密集表格固定表头对比](assets/demo_4k_gui_table.png)
+
+### 3. 工程 CAD / PCB 电路原理图 — 固定标题栏与 BOM 图例
+将右下角 **标题栏与 BOM 清单** 无损固定在共享前缀中，每个高清切片都能对照 BOM 解读微小的器件参数（`R14 4.7k`、`C22 100nF`、`TP7 SPI1_SCLK`）。
+
+![工程 CAD 与 PCB 原理图固定 BOM 对比](assets/demo_cad_pcb_schematic.png)
+
+<details>
+<summary><b>4. 区域地质图固定图例（Pinned Legend）与 UTM 坐标投影（点击展开）</b></summary>
+
+![区域地质图固定图例对比](assets/geological_map_demo.png)
+
+</details>
+
+---
+
+## 支持的图像格式与输入类型
+
+- **常规图像**：`PNG`、`JPEG`、`WEBP`、`BMP`、8-bit `TIFF`
+- **科研 / 遥感多波段图像**：支持 **16-bit 整型（`uint16` / `I;16`）与 32-bit 浮点（`float32` / `F`）单波段/多波段 GeoTIFF 与 NumPy 数组**，内置 2%–98% 鲁棒百分位对比度拉伸（含 `NaN` 容错），避免遥感原图直转 RGB 发黑
+- **亿级像素（100MP+）超大图**：自动安全解除 Pillow 像素上限，避免超大地质图/卫星拼接图报错崩溃
+- **地理配准影像**：纯 Python 解析 ESRI 世界文件（`.tfw` / `.pgw` / `.jgw` / `.wld`），支持含旋转项的完整仿射正反投影
 
 ---
 
@@ -52,20 +69,19 @@
 pip install -e .
 ```
 
-### 命令行一键体验（无需 GPU）
+### 一键生成多场景对比图 & 零解码检查（无需 GPU）
 
 ```bash
-# 1. 生成 4.8K 地质图直出 vs vlm-zoom 效果对比图
-vlm-zoom demo --out assets/geological_map_demo.png
+# 生成不同领域的 Before/After 效果对比图
+vlm-zoom demo --scenario geology --out assets/geological_map_demo.png
+vlm-zoom demo --scenario gui     --out assets/demo_4k_gui_table.png
+vlm-zoom demo --scenario cad     --out assets/demo_cad_pcb_schematic.png
 
-# 2. 零解码检查任意大图在 Qwen3-VL 下的 Token 消耗与最优切片方案
-vlm-zoom inspect your_8k_map.png --model Qwen/Qwen3-VL-4B-Instruct --json
-
-# 3. 导出受预算约束的切片、无损图例与坐标清单 manifest.json
-vlm-zoom tile your_8k_map.png --out-dir ./tiles_out --legend-box 3780,120,4750,2880
+# 零像素解码检查任意 4K–8K 大图的 Token 预算与最优切片方案
+vlm-zoom inspect your_8k_map.tif --model Qwen/Qwen3-VL-4B-Instruct --json
 ```
 
-### Python API：对接 vLLM 自动前缀缓存
+### Python API：多区域固定前缀 + Glance-and-Zoom 对接 vLLM
 
 先启动 vLLM 服务（开启 `--enable-prefix-caching`）：
 
@@ -95,6 +111,7 @@ engine = ZoomEngine(
     fusion_method="wbf",
 )
 
+# 可固定任意共享上下文：地质图图例、表格列名表头、GUI 工具栏、CAD 标题栏/BOM！
 result = engine.run(
     "regional_geology_8k.png",
     prompt=(
@@ -102,7 +119,7 @@ result = engine.run(
         '输出 JSON [{"label": str, "bbox_2d": [x1, y1, x2, y2], "score": float}]。'
     ),
     mode="glance_and_zoom",
-    legend_box=PixelBox(3780, 120, 4750, 2880),
+    pinned_boxes={"Map Legend": PixelBox(3780, 120, 4750, 2880)},
     pin_overview=True,
     geo_transform=GeoTransform.from_world_file("regional_geology_8k.pgw", crs="EPSG:32650"),
 )
@@ -115,17 +132,24 @@ for det, gbox in result.geo_detections:
 
 ---
 
-## 更多示例与测试
+## 全部示例脚本
 
-- 地质图完整示例：[`examples/geological_map_legend_zoom.py`](examples/geological_map_legend_zoom.py)
-- 遥感大图 Glance-and-Zoom 示例：[`examples/remote_sensing_vllm_batch.py`](examples/remote_sensing_vllm_batch.py)
-- 运行测试与代码检查：
+- 地质图固定图例 + UTM 投影：[`examples/geological_map_legend_zoom.py`](examples/geological_map_legend_zoom.py)
+- 遥感大图 Glance-and-Zoom：[`examples/remote_sensing_vllm_batch.py`](examples/remote_sensing_vllm_batch.py)
+- 4K GUI Agent & 密集表格固定表头：[`examples/gui_agent_pinned_header.py`](examples/gui_agent_pinned_header.py)
+- 工程 CAD / PCB 原理图固定 BOM：[`examples/cad_schematic_bom_zoom.py`](examples/cad_schematic_bom_zoom.py)
+
+---
+
+## 开发测试与图源声明
 
 ```bash
 pytest -v
 ruff check src tests examples
 ruff format --check src tests examples
 ```
+
+*`assets/` 中的真实地质图与高分航拍样例源自美国地质调查局（USGS）Public Domain 公开数据（Wikimedia Commons）。*
 
 ## 开源协议
 

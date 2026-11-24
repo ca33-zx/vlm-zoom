@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vlm-zoom"
-version = "0.1.0"
+version = "0.2.0"
 description = "Adaptive high-resolution tiling, exact visual token budgeting, pinned-context prefix caching, and Glance-and-Zoom inference for VLMs on vLLM (remote sensing, geological maps, 4K GUI, CAD & documents)."
 readme = "README.md"
 license = { text = "Apache-2.0" }

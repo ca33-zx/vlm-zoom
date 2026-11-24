@@ -79,3 +79,11 @@ def test_cli_demo_and_render_plan_overlay(tmp_path: Path):
     )
     assert overlay.width == 1000
     assert overlay.mode == "RGB"
+
+
+def test_cli_demo_gui_and_cad_scenarios(tmp_path: Path):
+    gui_png = tmp_path / "gui.png"
+    cad_png = tmp_path / "cad.png"
+    assert cli_main(["demo", "--scenario", "gui", "--out", str(gui_png)]) == 0
+    assert cli_main(["demo", "--scenario", "cad", "--out", str(cad_png)]) == 0
+    assert gui_png.exists() and cad_png.exists()

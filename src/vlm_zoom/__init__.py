@@ -30,11 +30,12 @@ from .tiler import (
     TileSpec,
     TilingPlan,
     build_pinned_context,
+    normalize_scientific_image,
     read_image_size,
     resize_to_token_budget,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "AdaptiveTiler",
@@ -65,6 +66,7 @@ __all__ = [
     "estimate_visual_tokens",
     "fuse_detections_nms",
     "fuse_detections_wbf",
+    "normalize_scientific_image",
     "parse_raw_boxes",
     "read_image_size",
     "resize_to_token_budget",

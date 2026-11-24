@@ -11,7 +11,12 @@ from .client import AsyncVLLMClient
 from .engine import ZoomEngine
 from .geo import GeoTransform
 from .tiler import AdaptiveTiler, PixelBox, build_pinned_context, read_image_size
-from .viz import make_synthetic_geological_map, render_hero_comparison
+from .viz import (
+    make_synthetic_4k_gui_dashboard,
+    make_synthetic_cad_blueprint,
+    make_synthetic_geological_map,
+    render_hero_comparison,
+)
 
 
 def _parse_box(raw: str | None) -> PixelBox | None:
@@ -21,6 +26,18 @@ def _parse_box(raw: str | None) -> PixelBox | None:
     if len(parts) != 4:
         raise ValueError(f"Expected 4 comma-separated coordinates x1,y1,x2,y2, got {raw!r}.")
     return PixelBox(*parts)
+
+
+def _parse_pinned_boxes(items: list[str] | None) -> dict[str, PixelBox]:
+    parsed: dict[str, PixelBox] = {}
+    for raw in items or ():
+        if "=" not in raw:
+            raise ValueError(f"Expected LABEL=x1,y1,x2,y2 for --pinned-box, got {raw!r}.")
+        label, coords = raw.split("=", 1)
+        box = _parse_box(coords)
+        assert box is not None
+        parsed[label.strip()] = box
+    return parsed
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
@@ -125,25 +142,98 @@ def cmd_tile(args: argparse.Namespace) -> int:
 
 
 def cmd_demo(args: argparse.Namespace) -> int:
-    img, legend_box, dets = make_synthetic_geological_map(width=args.width, height=args.height)
-    map_roi = PixelBox(80.0, 120.0, legend_box.x1 - 40.0, float(args.height - 120))
+    scenario = args.scenario
     tiler = AdaptiveTiler(
         args.model,
         max_tokens_per_tile=args.max_tokens_per_tile,
         overlap=0.15,
         min_detail_scale=0.85,
     )
-    plan = tiler.plan(img.width, img.height, roi=map_roi)
-    render_hero_comparison(
-        img,
-        plan,
-        detections=dets,
-        legend_box=legend_box,
-        zoom_callout_box=dets[0].box.pad(0.8, img.width, img.height),
-        direct_max_tokens=1024,
-        output_path=args.out,
-    )
-    print(f"Saved visual comparison demo to {args.out}")
+    if scenario == "gui":
+        img, pinned_box, dets = make_synthetic_4k_gui_dashboard(
+            width=args.width or 3840, height=args.height or 2160
+        )
+        body_roi = PixelBox(pinned_box.x1, pinned_box.y2, pinned_box.x2, float(img.height - 20))
+        plan = tiler.plan(img.width, img.height, roi=body_roi)
+        render_hero_comparison(
+            img,
+            plan,
+            detections=dets,
+            legend_box=pinned_box,
+            pinned_label="PINNED TABLE HEADER (KV)",
+            zoom_callout_box=PixelBox(1620.0, 1110.0, 2460.0, 1438.0),
+            scenario_title=(
+                "vlm-zoom (4K GUI & Dense Table): Direct Input vs. "
+                "Adaptive Tiling + Pinned Table Header"
+            ),
+            after_banner=(
+                f"AFTER: vlm-zoom ({plan.rows}x{plan.cols} tiles, "
+                f"<= {plan.max_tokens_per_tile} tok/tile, Pinned Header KV Cache)"
+            ),
+            left_bullets=[
+                "• 11px numbers & anomaly flags turn illegible",
+                "• GUI Agent clicks miss small action buttons",
+                "• Naive slicing loses table column headers",
+                f"• Raw 4K direct input = {plan.direct_estimate.visual_tokens:,} visual tok",
+            ],
+            right_bullets=[
+                "• Pinned Table Header cached ONCE in vLLM KV",
+                f"• Detail retention preserved at {plan.min_effective_scale:.2f}x",
+                "• Exact pixel coordinates mapped for GUI clicks",
+                "• Works on Excel, web tables, IDEs & dashboards",
+            ],
+            output_path=args.out,
+        )
+    elif scenario == "cad":
+        img, pinned_box, dets = make_synthetic_cad_blueprint(
+            width=args.width or 4200, height=args.height or 2600
+        )
+        plan = tiler.plan(img.width, img.height)
+        render_hero_comparison(
+            img,
+            plan,
+            detections=dets,
+            legend_box=pinned_box,
+            pinned_label="PINNED TITLE BLOCK / BOM (KV)",
+            zoom_callout_box=PixelBox(960.0, 580.0, 1520.0, 910.0),
+            scenario_title=(
+                "vlm-zoom (Engineering CAD & PCB Schematic): Direct Input vs. "
+                "Adaptive Tiling + Pinned BOM"
+            ),
+            after_banner=(
+                f"AFTER: vlm-zoom ({plan.rows}x{plan.cols} tiles, "
+                f"<= {plan.max_tokens_per_tile} tok/tile, Pinned BOM KV Cache)"
+            ),
+            left_bullets=[
+                "• Resistor/cap values (R14 4.7k, C22) blur out",
+                "• Pin labels & net names become unreadable",
+                "• Cropping tiles loses BOM & tolerance block",
+                f"• Raw 4.2K direct input = {plan.direct_estimate.visual_tokens:,} visual tok",
+            ],
+            right_bullets=[
+                "• Pinned Title Block & BOM reused across tiles",
+                f"• Native detail retained at {plan.min_effective_scale:.2f}x",
+                "• Lossless PNG prefix keeps crisp schematics",
+                "• Cross-tile WBF deduplicates bus annotations",
+            ],
+            output_path=args.out,
+        )
+    else:
+        w = args.width or 4800
+        h = args.height or 3000
+        img, legend_box, dets = make_synthetic_geological_map(width=w, height=h)
+        map_roi = PixelBox(80.0, 120.0, legend_box.x1 - 40.0, float(h - 120))
+        plan = tiler.plan(img.width, img.height, roi=map_roi)
+        render_hero_comparison(
+            img,
+            plan,
+            detections=dets,
+            legend_box=legend_box,
+            zoom_callout_box=dets[0].box.pad(0.8, img.width, img.height),
+            direct_max_tokens=1024,
+            output_path=args.out,
+        )
+    print(f"Saved {scenario} visual comparison demo to {args.out}")
     return 0
 
 
@@ -169,6 +259,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         mode=args.mode,
         roi=_parse_box(args.roi),
         legend_box=_parse_box(args.legend_box),
+        pinned_boxes=_parse_pinned_boxes(args.pinned_box) or None,
         pin_overview=args.pin_overview,
         geo_transform=geo_tf,
     )
@@ -235,12 +326,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_tile.add_argument("--format", choices=["PNG", "JPEG"], default="PNG")
     p_tile.set_defaults(func=cmd_tile)
 
-    p_demo = sub.add_parser("demo", help="Generate a 4.8K geological map visual comparison PNG.")
+    p_demo = sub.add_parser("demo", help="Generate a visual before/after comparison PNG.")
+    p_demo.add_argument("--scenario", choices=["geology", "gui", "cad"], default="geology")
     p_demo.add_argument("--out", default="assets/geological_map_demo.png")
     p_demo.add_argument("--model", default="qwen3_vl")
     p_demo.add_argument("--max-tokens-per-tile", type=int, default=1024)
-    p_demo.add_argument("--width", type=int, default=4800)
-    p_demo.add_argument("--height", type=int, default=3000)
+    p_demo.add_argument("--width", type=int, default=0)
+    p_demo.add_argument("--height", type=int, default=0)
     p_demo.set_defaults(func=cmd_demo)
 
     p_run = sub.add_parser("run", help="Run concurrent Glance-and-Zoom or Grid inference on vLLM.")
@@ -256,6 +348,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--max-concurrency", type=int, default=8)
     p_run.add_argument("--roi", type=str, default=None)
     p_run.add_argument("--legend-box", type=str, default=None)
+    p_run.add_argument(
+        "--pinned-box",
+        action="append",
+        default=None,
+        help="Repeatable LABEL=x1,y1,x2,y2 region to pin & KV-cache across tiles.",
+    )
     p_run.add_argument("--pin-overview", action="store_true")
     p_run.add_argument("--coord-space", choices=["norm1000", "norm1", "pixel"], default="norm1000")
     p_run.add_argument("--fusion", choices=["wbf", "nms"], default="wbf")

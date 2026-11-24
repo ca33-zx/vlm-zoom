@@ -186,3 +186,36 @@ async def test_glance_and_zoom_falls_back_to_full_image_when_no_roi_returned():
     assert len(result.plans) == 1
     assert result.plans[0].roi == PixelBox(0.0, 0.0, 2000.0, 1500.0)
     assert result.token_usage.num_tiles >= 1
+
+
+@pytest.mark.asyncio
+async def test_multiple_named_pinned_boxes_share_byte_identical_prefix():
+    img = Image.new("RGB", (3840, 2160), (20, 25, 35))
+
+    def responder(messages: list[dict[str, Any]]) -> VLMResponse:
+        return VLMResponse(text="[]", prompt_tokens=1200, completion_tokens=4, cached_tokens=600)
+
+    backend = MockVLMBackend(responder)
+    engine = ZoomEngine(backend, model_family="qwen3_vl", max_tokens_per_tile=512)
+    result = await engine.run_async(
+        img,
+        "Find all rows with ANOMALY status.",
+        mode="grid",
+        grid=(2, 2),
+        pinned_boxes={
+            "Top Toolbar": (0, 0, 3840, 74),
+            "Table Header": (412, 104, 3800, 210),
+        },
+    )
+
+    assert len(backend.calls) == 4
+    prefix_0 = json.dumps(backend.calls[0][:-1], sort_keys=True)
+    assert "[Top Toolbar]" in prefix_0
+    assert "[Table Header]" in prefix_0
+    for call_msgs in backend.calls[1:]:
+        assert json.dumps(call_msgs[:-1], sort_keys=True) == prefix_0
+    assert result.token_usage.pinned_prefix_tokens > 0
+    assert (
+        result.token_usage.estimated_prefix_tokens_saved
+        == result.token_usage.pinned_prefix_tokens * 3
+    )
